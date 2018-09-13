@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+INFILE=cpup
+BLOCKSIZE=50
+SKIP=0
+PORT=/dev/ttyUSB0
+
+FILESIZE=`stat -c '%s' $INFILE`
+
+function openSerial() {
+	stty -F $PORT 115200 cs8 -parenb -cstopb -echo
+	echo $PORT &
+	PID=$!
+}
+
+function closeSerial() {
+	sleep 1
+	kill $PID
+}
+
+function sendChunk() {
+	CHUNK=`dd if="$INFILE" bs=$BLOCKSIZE count=1 skip=$SKIP status=none | base64 -w 0`
+	#echo $CHUNK
+	#CMD="f.write(ubinascii.a2b_base64('$CHUNK')"
+	CMD="print('hello')\r"
+	echo -e "$CMD" > $PORT
+}
+
+
+((CHUNKS = FILESIZE / BLOCKSIZE))
+if ((FILESIZE % BLOCKSIZE)) ; then ((CHUNKS++)) ; fi
+
+openSerial
+#send "f=uio.open('test.py', 'wb')"
+
+while ((CHUNKS)) ; do sendChunk ; ((CHUNKS--)) ; ((SKIP++)) ; done
+
+closeSerial
+
+echo "Done."
