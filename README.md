@@ -12,6 +12,11 @@ To get usage:
 
 	cpup -h
 
+	Usage: ./cpup <-f in_filename> [-o out_filename] [-d /dev/ttyACM0] [-s 115200] [-v]
+	       ./cpup -h
+
+	Defaults are as shown. Will use -f as -o if -o is not specified.
+
 Note, this does not hold your hand. There are no checks for sufficient space,
 and existing files of the same name are simply overwritten. Sharp tool, use
 with care, will ya?
