@@ -1,39 +1,129 @@
 #!/usr/bin/env bash
-INFILE=cpup
-BLOCKSIZE=50
-SKIP=0
-PORT=/dev/ttyUSB0
 
-FILESIZE=`stat -c '%s' $INFILE`
+# cpup - A command-line utility to copy a file to a MicroPython device's internal filesystem
+#
+# by Aaron Kondziela <aaron@aaronkondziela.com>
+# Released under MIT license
+
+INFILE=""
+OUTFILE=""
+PORT=/dev/ttyACM0
+SPEED=115200
+VERBOSE=0
+
+BLOCKSIZE=100
+SKIP=0
+
+trap ctrl_c INT
+
+function ctrl_c() {
+	if ((VERBOSE && PID)) ; then kill $PID ; fi
+}
 
 function openSerial() {
-	stty -F $PORT 115200 cs8 -parenb -cstopb -echo
-	echo $PORT &
-	PID=$!
+	echo "Opening Serial. Waiting a bit in case ModemManager is wanking around with the port..."
+	I=6
+	while ((I--)) ; do sleep 2 ; echo -n "." ; done
+	echo "done"
+	stty -F $PORT $SPEED cs8 -parenb -cstopb -echo
+	# shitty attempt to clean up after ModemManager..."
+	echo -e "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\r" > $PORT
+	sleep 0.1
+	if ((VERBOSE)) ; then
+		cat $PORT &
+		PID=$!
+	fi
+	sleep 1
 }
 
 function closeSerial() {
-	sleep 1
-	kill $PID
+	sleep 2
+	if ((VERBOSE)) ; then kill $PID ; fi
+}
+
+function send() {
+	echo -e "$1\r" > $PORT
+	if ! ((VERBOSE)) ; then echo -n "#" ; fi
+	sleep 0.1
+}
+
+function openFile() {
+	send "import ubinascii"
+	send "f = open('$OUTFILE', 'wb')"
+}
+
+function closeFile() {
+	if ! ((VERBOSE)) ; then echo "" ; fi
+	send "f.close()"
 }
 
 function sendChunk() {
 	CHUNK=`dd if="$INFILE" bs=$BLOCKSIZE count=1 skip=$SKIP status=none | base64 -w 0`
-	#echo $CHUNK
-	#CMD="f.write(ubinascii.a2b_base64('$CHUNK')"
-	CMD="print('hello')\r"
-	echo -e "$CMD" > $PORT
+	send "f.write(ubinascii.a2b_base64('$CHUNK'))"
 }
 
+function usage() {
+	echo ""
+	echo "$0 - Copy a file to a MicroPython device's internal filesystem."
+	echo "by Aaron Kondziela <aaron@aaronkondziela.com> github etc etc and so on"
+	echo ""
+	echo "Usage: $0 <-f in_filename> [-o out_filename] [-d /dev/ttyACM0] [-s 115200] [-v]"
+	echo "       $0 -h"
+	echo ""
+	echo "Defaults are as shown. Will use -f as -o if -o is not specified."
+	echo "Works on GNU/Linux. Probably won't work on a Mac, but that's not tested."
+	echo ""
+}
 
+while getopts ":vhd:s:f:o:" OPT ; do
+	case $OPT in
+		v)
+			VERBOSE=1
+			;;
+		h)
+			usage
+			exit 0
+			;;
+		d)
+			GOTPORT=1
+			PORT="$OPTARG"
+			;;
+		s)
+			GOTSPEED=1
+			SPEED="$OPTARG"
+			;;
+		f)
+			INFILE="$OPTARG"
+			;;
+		o)
+			GOTOUTFILE=1
+			OUTFILE="$OPTARG"
+			;;
+		\?)
+			echo "Invalid option: -$OPTARG" >&2
+			usage
+			exit 1
+			;;
+		:)
+			echo "Option -$OPTARG requires an argument" >&2
+			usage
+			exit 1
+			;;
+	esac
+done
+
+if [ "$INFILE" == "" ] ; then echo "Missing required arg -f" ; usage ; exit 1 ; fi
+if [ "$GOTPORT" != "1" ] ; then echo "Using default device $PORT" ; fi
+if [ "$GOTSPEED" != "1" ] ; then echo "Using default speed 115200" ; fi
+if [ "$GOTOUTFILE" != "1" ] ; then echo "Using input file name '$INFILE' for output file name" ; fi
+
+FILESIZE=`stat -c '%s' $INFILE`
 ((CHUNKS = FILESIZE / BLOCKSIZE))
 if ((FILESIZE % BLOCKSIZE)) ; then ((CHUNKS++)) ; fi
-
 openSerial
-#send "f=uio.open('test.py', 'wb')"
-
+openFile
 while ((CHUNKS)) ; do sendChunk ; ((CHUNKS--)) ; ((SKIP++)) ; done
-
+closeFile
 closeSerial
 
 echo "Done."
