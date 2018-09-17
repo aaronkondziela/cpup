@@ -10,6 +10,8 @@ OUTFILE=""
 PORT=/dev/ttyACM0
 SPEED=115200
 VERBOSE=0
+PUT=1
+QUICK=0
 
 BLOCKSIZE=100
 SKIP=0
@@ -17,19 +19,24 @@ SKIP=0
 trap ctrl_c INT
 
 function ctrl_c() {
-	if ((VERBOSE && PID)) ; then kill $PID ; fi
+	if ((VERBOSE && PUT && PID)) ; then kill $PID ; fi
+	echo "exiting from ctrl-c"
+	exit 2
 }
 
 function openSerial() {
-	echo "Opening Serial. Waiting a bit in case ModemManager is wanking around with the port..."
-	I=6
-	while ((I--)) ; do sleep 2 ; echo -n "." ; done
-	echo "done"
-	stty -F $PORT $SPEED cs8 -parenb -cstopb -echo
+	echo "Opening Serial"
+	if ! ((QUICK)) ; then
+		echo "Waiting a bit in case ModemManager is wanking around with the port..."
+		I=6
+		while ((I--)) ; do sleep 2 ; echo -n "." ; done
+		echo "done"
+	fi
+	stty -F $PORT $SPEED cs8 -parenb -cstopb -echo ocrnl
 	# shitty attempt to clean up after ModemManager..."
 	echo -e "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\r" > $PORT
 	sleep 0.1
-	if ((VERBOSE)) ; then
+	if ((VERBOSE && PUT)) ; then
 		cat $PORT &
 		PID=$!
 	fi
@@ -38,23 +45,39 @@ function openSerial() {
 
 function closeSerial() {
 	sleep 2
-	if ((VERBOSE)) ; then kill $PID ; fi
+	if ((VERBOSE && PUT)) ; then kill $PID ; fi
 }
 
 function send() {
 	echo -e "$1\r" > $PORT
-	if ! ((VERBOSE)) ; then echo -n "#" ; fi
+	if ! ((VERBOSE && PUT)) ; then echo -n "#" ; fi
 	sleep 0.1
 }
 
 function openFile() {
-	send "import ubinascii"
+	send "import ubinascii, os"
+	send "os.unlink('$OUTFILE')"
+	sleep 1
 	send "f = open('$OUTFILE', 'wb')"
 }
 
 function closeFile() {
-	if ! ((VERBOSE)) ; then echo "" ; fi
+	if ! ((VERBOSE && PUT)) ; then echo "" ; fi
 	send "f.close()"
+}
+
+function openFileForGet() {
+	send "\x01"
+	read -r -t 1 X
+	send "import ubinascii,sys"
+	send "f = open('$OUTFILE', 'rb')"
+	send "while True:"
+	send "\tc = ubinascii.b2a_base64(f.read($BLOCKSIZE))"
+	send "\tsys.stdout.write(c)"
+	send "\tsys.stdout.write(\"\\n\")"
+	send "\tif not len(c) or c == b'\\\\n':"
+	send "\t\tbreak"
+	send ""
 }
 
 function sendChunk() {
@@ -62,68 +85,108 @@ function sendChunk() {
 	send "f.write(ubinascii.a2b_base64('$CHUNK'))"
 }
 
-function usage() {
-	echo ""
-	echo "$0 - Copy a file to a MicroPython device's internal filesystem."
-	echo "by Aaron Kondziela <aaron@aaronkondziela.com> github etc etc and so on"
-	echo ""
-	echo "Usage: $0 <-f in_filename> [-o out_filename] [-d /dev/ttyACM0] [-s 115200] [-v]"
-	echo "       $0 -h"
-	echo ""
-	echo "Defaults are as shown. Will use -f as -o if -o is not specified."
-	echo "Works on GNU/Linux. Probably won't work on a Mac, but that's not tested."
-	echo ""
+function getChunk() {
+	#CHUNK='junk' # we've got junk in the chunk!
+	#while [[ $CHUNK != "" && ${CHUNK:0:2} != "b'" ]] ; do
+	read -r -t 1 CHUNK < $PORT
+	echo "read $CHUNK"
+	if [[ ${CHUNK:0:3} == ">OK" ]] ; then
+		CHUNK=${CHUNK#">OK"}
+	fi
+#	done
+	#CHUNK=${CHUNK#"b'"}
+	# damn you, bash escapes!!
+	#CHUNK=`echo $CHUNK | sed -re "s/\\\\\\n'.*//"`
 }
 
-while getopts ":vhd:s:f:o:" OPT ; do
+function usage() {
+	cat <<-EOF
+	
+	$0 - Copy a file to a MicroPython device's internal filesystem.
+	by Aaron Kondziela <aaron@aaronkondziela.com> github etc etc and so on"
+
+	Usage:
+
+	Put a file from local to device:
+	    $0 [-p] <-f local_file> [-r remote_file] [-d /dev/ttyACM0] [-s 115200] [-v] [-q]
+	
+	Get a file from device to local:
+	    $0 <-g> <-r remote_file> [-f local_file] [-d /dev/ttyACM0] [-s 115200] [-v] [-q]
+
+	Help:
+	    $0 -h
+
+	To Put a file, -p flag is optional (default). To Get a file, -g flag is required.
+	Use -v to activate verbose mode, which will show you replies from the MicroPython
+	REPL. You may not get everything so don't rely on it for scripts. Defaults are as
+	shown. Will use -f as -r if -r is not specified. The -q flag skips the wait.
+
+	Works on GNU/Linux. Probably won't work on a Mac, but that's not tested.
+
+
+EOF
+}
+
+while getopts ":vhpgd:s:f:r:q" OPT ; do
 	case $OPT in
-		v)
-			VERBOSE=1
-			;;
-		h)
-			usage
-			exit 0
-			;;
-		d)
-			GOTPORT=1
-			PORT="$OPTARG"
-			;;
-		s)
-			GOTSPEED=1
-			SPEED="$OPTARG"
-			;;
-		f)
-			INFILE="$OPTARG"
-			;;
-		o)
-			GOTOUTFILE=1
-			OUTFILE="$OPTARG"
-			;;
-		\?)
-			echo "Invalid option: -$OPTARG" >&2
-			usage
-			exit 1
-			;;
-		:)
-			echo "Option -$OPTARG requires an argument" >&2
-			usage
-			exit 1
-			;;
+		v) VERBOSE=1 ;;
+		h) usage ; exit 0 ;;
+		p) PUT=1 ;;
+		g) PUT=0 ;;
+		d) GOTPORT=1 ; PORT="$OPTARG" ;;
+		s) GOTSPEED=1 ; SPEED="$OPTARG" ;;
+		f) GOTINFILE=1 ; INFILE="$OPTARG" ;;
+		r) GOTOUTFILE=1 ; OUTFILE="$OPTARG" ;;
+		q) QUICK=1 ;;
+		\?) echo "Invalid option: -$OPTARG" >&2 ; usage ; exit 1 ;;
+		:) echo "Option -$OPTARG requires an argument" >&2 ; usage ; exit 1 ;;
 	esac
 done
 
-if [ "$INFILE" == "" ] ; then echo "Missing required arg -f" ; usage ; exit 1 ; fi
+if ((PUT)) ; then
+	if ! ((GOTINFILE)) ; then echo "Missing required arg -f for Put mode" ; usage ; exit 1 ; fi
+	if ! ((GOTOUTFILE)) ; then
+		echo "Using local file name '$INFILE' for remote file name"
+		OUTFILE="$INFILE"
+	fi
+else
+	if ! ((GOTOUTFILE)) ; then echo "Missing required arg -r for Get mode" ; usage ; exit 1 ; fi
+	if ! ((GOTINFILE)) ; then
+		echo "Using remote file name '$OUTFILE' for local file name"
+		INFILE="$OUTFILE"
+	fi
+fi
+
 if [ "$GOTPORT" != "1" ] ; then echo "Using default device $PORT" ; fi
 if [ "$GOTSPEED" != "1" ] ; then echo "Using default speed 115200" ; fi
-if [ "$GOTOUTFILE" != "1" ] ; then echo "Using input file name '$INFILE' for output file name" ; fi
 
-FILESIZE=`stat -c '%s' $INFILE`
-((CHUNKS = FILESIZE / BLOCKSIZE))
-if ((FILESIZE % BLOCKSIZE)) ; then ((CHUNKS++)) ; fi
-openSerial
-openFile
-while ((CHUNKS)) ; do sendChunk ; ((CHUNKS--)) ; ((SKIP++)) ; done
-closeFile
-closeSerial
+if ((PUT)) ; then
+	FILESIZE=`stat -c '%s' $INFILE`
+	((CHUNKS = FILESIZE / BLOCKSIZE))
+	if ((FILESIZE % BLOCKSIZE)) ; then ((CHUNKS++)) ; fi
+	openSerial
+	openFile
+	while ((CHUNKS)) ; do sendChunk ; ((CHUNKS--)) ; ((SKIP++)) ; done
+	closeFile
+	closeSerial
+else
+	echo "Unimplemented."
+	exit
+	rm -f $INFILE
+	openSerial
+	openFileForGet
+	send "\x04"
+
+	CHUNK='junk' # we got some junk in the chunk!
+	while [[ "$CHUNK" != "" ]] ; do
+		getChunk
+		if [[ "$CHUNK" != "" ]] ; then
+			echo "$CHUNK" | base64 -d >> $INFILE
+		fi
+		sleep 0.2
+	done
+	closeFile
+	closeSerial
+fi
 
 echo "Done."

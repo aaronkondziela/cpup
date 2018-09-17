@@ -21,6 +21,11 @@ Note, this does not hold your hand. There are no checks for sufficient space,
 and existing files of the same name are simply overwritten. Sharp tool, use
 with care, will ya?
 
+Note, file get does not work yet.
+
+Also also wik, `cat.py` can help with that at the REPL. Toss it into `lib/cat.py`, then
+`from cat import *` and `cat('filename')`
+
 Pro Tips
 --------
 
