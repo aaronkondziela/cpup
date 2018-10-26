@@ -51,7 +51,7 @@ function closeSerial() {
 function send() {
 	echo -e "$1\r" > $PORT
 	if ! ((VERBOSE && PUT)) ; then echo -n "#" ; fi
-	sleep 0.1
+	sleep 0.4
 }
 
 function openFile() {
