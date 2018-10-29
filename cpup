@@ -18,6 +18,14 @@ SKIP=0
 
 trap ctrl_c INT
 
+sudo lsof -n 2>/dev/null | grep -q $PORT
+if [ $? == 0 ]
+then
+	echo "Port $PORT is in use. Please attach to it with a terminal, hit enter to get a"
+	echo "clean python prompt (>>>), and close the terminal, then try this command again."
+	exit 1
+fi
+
 function ctrl_c() {
 	if ((VERBOSE && PUT && PID)) ; then kill $PID ; fi
 	echo "exiting from ctrl-c"
